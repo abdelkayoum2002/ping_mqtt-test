@@ -1,42 +1,43 @@
-import mqtt from 'mqtt';
+const mqtt = require('mqtt');
+const clients = ['client1', 'client2', 'client3']; // Add more client IDs as needed
+const brokerUrl = 'mqtt://broker.emqx.io:1883'; // Or your broker's IP/hostname
 
-const BROKER_URL = 'mqtt://broker.emqx.io:1883';
-const clientId = 'monitor_' + Math.random().toString(16).slice(2, 6);
+// Store ping times
+const pingMap = {};
 
-const baseTopic = 'esp32/status/ping';
-const wildcardResponseTopic = `${baseTopic}/+`;
-
-const client = mqtt.connect(BROKER_URL, { clientId });
-
-let pingStart = null;
+const client = mqtt.connect(brokerUrl);
 
 client.on('connect', () => {
-  console.log(`✅ Monitor connected as ${clientId}`);
+    console.log('Ping server connected to broker.');
 
-  client.subscribe(wildcardResponseTopic, (err) => {
-    if (err) return console.error('❌ Subscribe failed:', err);
-    console.log(`📡 Subscribed to: ${wildcardResponseTopic}`);
-  });
+    // Subscribe to pong topics
+    clients.forEach((id) => {
+        const pongTopic = `${id}/pong`;
+        client.subscribe(pongTopic, (err) => {
+            if (!err) {
+                console.log(`Subscribed to ${pongTopic}`);
+            }
+        });
+    });
 
-  // Periodic ping
-  setInterval(() => {
-    pingStart = Date.now();
-    client.publish(baseTopic, '');
-    console.log('📤 Ping sent to', baseTopic);
-  }, 5000); // every 5 seconds
+    // Start periodic ping
+    setInterval(() => {
+        const timestamp = Date.now();
+        clients.forEach((id) => {
+            const pingTopic = `${id}/ping`;
+            pingMap[id] = timestamp; // Save send time
+            client.publish(pingTopic, String(timestamp));
+        });
+    }, 5000); // Ping every 5 seconds
 });
 
-client.on('message', (topic, messageBuffer) => {
-  const now = Date.now();
-  try {
-    const from = topic.split('/').pop();
-    const latency = now - pingStart;
-    console.log(`⏱️ RTT from ${from}: ${latency} ms`);
-  } catch (err) {
-    console.error('❌ Parse error:', err.message);
-  }
+client.on('message', (topic, message) => {
+    const [clientId, type] = topic.split('/');
+    if (type === 'pong') {
+        const sentTime = parseInt(message.toString(), 10);
+        const now = Date.now();
+        const rtt = now - sentTime;
+        console.log(`[${clientId}] Ping: ${rtt} ms`);
+    }
 });
 
-client.on('error', (err) => {
-  console.error('❌ MQTT error:', err.message);
-});
